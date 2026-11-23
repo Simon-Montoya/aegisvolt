@@ -277,7 +277,7 @@ canary-deploy:
     AWS_ACCESS_KEY_ID: $FLOCI_IAM_ACCESS_KEY_ID
     AWS_SECRET_ACCESS_KEY: $FLOCI_IAM_SECRET_ACCESS_KEY
   script:
-    - apk add --no-cache bash gettext jq >/dev/null 2>&1 || true
+    - apk add --no-cache bash gettext jq docker-cli >/dev/null 2>&1 || true
     - . scripts/ci/detect_env.sh
     - bash scripts/ci/kubeconfig.sh "$TF_ENV"
     # 20 % canary -> análisis (health + CloudWatch + alarma) -> 100 % o rollback automático

@@ -16,10 +16,10 @@ if (-not (Test-Path "$root\$outputs")) { throw "Falta $outputs. Ejecute primero 
 $bad = if ($BadRelease) { "true" } else { "false" }
 
 docker run --rm `
-  -v "${root}:/repo" -w /repo `
+  -v "${root}:/repo" -w /repo -v /var/run/docker.sock:/var/run/docker.sock `
   -e AWS_ENDPOINT_URL=http://host.docker.internal:4566 `
   -e AWS_ACCESS_KEY_ID=$env:AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY=$env:AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION=us-east-1 `
   -e SIMULATE_BAD_RELEASE=$bad `
   alpine/k8s:1.31.4 `
-  bash -c "apk add --no-cache gettext jq >/dev/null 2>&1; bash scripts/ci/kubeconfig.sh $Env && bash scripts/deploy_k8s.sh $Env $Tag $outputs"
+  bash -c "apk add --no-cache gettext jq docker-cli >/dev/null 2>&1; bash scripts/ci/kubeconfig.sh $Env && bash scripts/deploy_k8s.sh $Env $Tag $outputs"
 if ($LASTEXITCODE -ne 0) { throw "El despliegue falló (código $LASTEXITCODE)" }
