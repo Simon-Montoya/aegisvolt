@@ -30,7 +30,21 @@ PAYLOAD="$(jq -n --arg ref "$REF" --arg mode "$MODE" --arg src "$SOURCE" --arg t
     {key: "PR_TARGET_BRANCH",    value: $tgt},
     {key: "GITHUB_COMMIT_SHA",   value: $sha}
   ]}')"
-PIPELINE="$(curl -sS --fail-with-body -X POST -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" -H "Content-Type: application/json" -d "$PAYLOAD" "${API}/pipeline")"
+# Verificación previa: token y ruta del proyecto (errores claros en vez de "exit code 22")
+CHECK_CODE="$(curl -sS -o /tmp/project.json -w '%{http_code}' -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" "${API}")"
+if [[ "$CHECK_CODE" != "200" ]]; then
+  echo "❌ GitLab respondió HTTP ${CHECK_CODE} al consultar el proyecto '${GITLAB_PROJECT}':"; cat /tmp/project.json; echo
+  echo "   401 = GITLAB_TOKEN inválido o vencido · 404 = GITLAB_PROJECT mal escrito (debe ser grupo/proyecto, sin https://)"
+  exit 1
+fi
+echo "Proyecto GitLab: $(jq -r .path_with_namespace /tmp/project.json) (rama por defecto: $(jq -r .default_branch /tmp/project.json))"
+
+HTTP_CODE="$(curl -sS -o /tmp/pipeline.json -w '%{http_code}' -X POST -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" -H "Content-Type: application/json" -d "$PAYLOAD" "${API}/pipeline")"
+if [[ "$HTTP_CODE" != "201" ]]; then
+  echo "❌ GitLab rechazó la creación del pipeline (HTTP ${HTTP_CODE}):"; cat /tmp/pipeline.json; echo
+  exit 1
+fi
+PIPELINE="$(cat /tmp/pipeline.json)"
 ID="$(jq -r .id <<<"$PIPELINE")"; URL="$(jq -r .web_url <<<"$PIPELINE")"
 echo "Pipeline GitLab #${ID}: ${URL}"
 echo "### Pipeline de GitLab (${MODE}: ${SOURCE} → ${TARGET})" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
