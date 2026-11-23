@@ -38,7 +38,7 @@ class ServiceUrls:
 
 
 class ServiceClients:
-    def __init__(self, urls: ServiceUrls | None = None, timeout: float = 5.0, transport: httpx.BaseTransport | None = None) -> None:
+    def __init__(self, urls: ServiceUrls | None = None, timeout: float = float(os.getenv("DOWNSTREAM_TIMEOUT_SECONDS", "10")), transport: httpx.BaseTransport | None = None) -> None:
         self.urls = urls or ServiceUrls()
         self.http = httpx.Client(timeout=timeout, transport=transport)
 
