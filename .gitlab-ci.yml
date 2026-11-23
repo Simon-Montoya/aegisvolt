@@ -56,6 +56,12 @@ default:
   tags: [aegisvolt-local]
   interruptible: true
 
+# Reintento ante cortes de red (registry de Terraform, PyPI, npm, Docker Hub).
+.network_retry:
+  retry:
+    max: 2
+    when: [script_failure, runner_system_failure, stuck_or_timeout_failure]
+
 # ----------------------------------------------------------------- reglas
 .pre_merge:
   rules:
@@ -111,7 +117,7 @@ validate-promotion:
 
 lint:
   stage: validate
-  extends: [.python, .always]
+  extends: [.python, .always, .network_retry]
   script:
     - ruff check .
     - bash -n scripts/*.sh scripts/ci/*.sh
@@ -121,7 +127,7 @@ lint:
 
 terraform-validate:
   stage: validate
-  extends: .always
+  extends: [.always, .network_retry]
   image:
     name: $TF_IMAGE
     entrypoint: [""]
@@ -133,7 +139,7 @@ terraform-validate:
 # ================================================================== BUILD
 frontend-build:
   stage: build
-  extends: .always
+  extends: [.always, .network_retry]
   image: $NODE_IMAGE
   cache:
     key: npm-$CI_COMMIT_REF_SLUG
@@ -293,13 +299,7 @@ smoke-test:
     - apk add --no-cache bash >/dev/null 2>&1 || true
     - . scripts/ci/detect_env.sh
     - bash scripts/ci/kubeconfig.sh "$TF_ENV"
-    - |
-      kubectl -n aegisvolt exec deploy/graphql-gateway-stable -- python -c "
-      import json, urllib.request
-      q = {'query': '{ environment { name version services } stations { stationId availableConnectors } featureFlags { name enabled } }'}
-      req = urllib.request.Request('http://127.0.0.1:8080/graphql', data=json.dumps(q).encode(), headers={'Content-Type': 'application/json'})
-      data = json.load(urllib.request.urlopen(req, timeout=10))['data']
-      print(json.dumps(data, indent=2))
-      assert data['environment']['name'] == '$TF_ENV', 'ambiente incorrecto'
-      assert all(v == 'ok' for v in data['environment']['services'].values()), 'servicio caído'
-      "
+    # Espera a que el gateway recién promovido esté listo y consulta GraphQL desde dentro del pod
+    - kubectl -n aegisvolt rollout status deploy/graphql-gateway-stable --timeout=180s
+    - kubectl -n aegisvolt wait --for=condition=Ready pod -l app=graphql-gateway,track=stable --timeout=180s
+    - kubectl -n aegisvolt exec -i deploy/graphql-gateway-stable -- python - "$TF_ENV" < scripts/ci/smoke_query.py
