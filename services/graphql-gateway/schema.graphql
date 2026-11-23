@@ -1,0 +1,175 @@
+type Compensation {
+  step: String!
+  action: String!
+  result: String
+  idempotent: Boolean!
+  at: String!
+}
+
+type Connector {
+  connectorId: ID!
+  powerKw: Int!
+  connectorType: String
+  status: ConnectorStatus!
+  sagaId: String
+  updatedAt: String
+}
+
+enum ConnectorStatus {
+  AVAILABLE
+  RESERVED
+  CHARGING
+  OUT_OF_SERVICE
+}
+
+type EnvironmentInfo {
+  name: String!
+  version: String!
+  track: String!
+  region: String!
+  tables: JSON!
+  services: JSON!
+}
+
+type FeatureFlag {
+  name: String!
+  enabled: Boolean!
+  description: String
+  environment: String!
+  updatedAt: String
+  updatedBy: String
+}
+
+"""
+The `JSON` scalar type represents JSON values as specified by [ECMA-404](https://ecma-international.org/wp-content/uploads/ECMA-404_2nd_edition_december_2017.pdf).
+"""
+scalar JSON @specifiedBy(url: "https://ecma-international.org/wp-content/uploads/ECMA-404_2nd_edition_december_2017.pdf")
+
+type LedgerEntry {
+  sagaId: String!
+  type: String!
+  amount: Float!
+  note: String
+  createdAt: String!
+}
+
+type Mutation {
+  """
+  Dispara la SAGA: reserva (1) -> cobro (2) -> activación del cargador (3)
+  """
+  reserveAndActivateCharge(input: ReserveChargeInput!): SagaResult!
+
+  """
+  Reanuda las compensaciones de una SAGA huérfana o en COMPENSATION_FAILED
+  """
+  retryCompensation(sagaId: ID!): SagaResult!
+
+  """
+  Cambia una feature flag del ambiente actual en caliente (sin redesplegar)
+  """
+  setFeatureFlag(name: String!, enabled: Boolean!, actor: String! = "frontend"): FeatureFlag!
+
+  """Finaliza la carga de un conector (CHARGING -> AVAILABLE)"""
+  finishCharging(connectorId: ID!): Boolean!
+}
+
+type Query {
+  """Estaciones con el estado de cada conector"""
+  stations: [Station!]!
+  station(stationId: ID!): Station
+
+  """Últimas lecturas de telemetría del conector"""
+  telemetry(connectorId: ID!, limit: Int! = 20): [TelemetryPoint!]!
+  wallet(fleetId: ID!): Wallet
+
+  """
+  Feature flags del ambiente actual (tabla aegisvolt-feature-flags-<env>)
+  """
+  featureFlags: [FeatureFlag!]!
+
+  """Historial de transacciones SAGA"""
+  sagas(limit: Int! = 25): [SagaTransaction!]!
+  saga(sagaId: ID!): SagaTransaction
+  environment: EnvironmentInfo!
+}
+
+input ReserveChargeInput {
+  fleetId: String!
+  connectorId: String!
+  energyKwh: Float!
+  fastChargeBoost: Boolean! = false
+
+  """UUID; repetir la mutación con el mismo valor es idempotente"""
+  idempotencyKey: String = null
+}
+
+type SagaEvent {
+  step: String!
+  action: String!
+  status: String!
+  at: String!
+  detail: String
+  code: String
+}
+
+type SagaResult {
+  success: Boolean!
+  idempotent: Boolean!
+  message: String!
+  saga: SagaTransaction
+}
+
+enum SagaStatus {
+  STARTED
+  RESERVED
+  CHARGED
+  COMPLETED
+  REJECTED
+  COMPENSATING
+  COMPENSATED
+  COMPENSATION_FAILED
+}
+
+type SagaTransaction {
+  sagaId: ID!
+  correlationId: String!
+  environment: String!
+  status: SagaStatus!
+  fleetId: String!
+  connectorId: String!
+  energyKwh: Float!
+  amount: Float
+  surgeApplied: Boolean
+  failureReason: String
+  completedSteps: [String!]!
+  compensations: [Compensation!]!
+  events: [SagaEvent!]!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type Station {
+  stationId: ID!
+  name: String
+  city: String
+  connectors: [Connector!]!
+  availableConnectors: Int!
+}
+
+type TelemetryPoint {
+  connectorId: String!
+  sagaId: String
+  powerKw: Float!
+  voltageV: Float!
+  temperatureC: Float!
+  energyDeliveredKwh: Float!
+  recordedAt: String!
+}
+
+type Wallet {
+  fleetId: ID!
+  name: String
+  balance: Float!
+  currency: String!
+  ledger: [LedgerEntry!]!
+}

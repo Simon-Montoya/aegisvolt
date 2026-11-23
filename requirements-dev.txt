@@ -1,0 +1,5 @@
+-r services/requirements.txt
+-r services/graphql-gateway/requirements.txt
+moto[dynamodb,logs,cloudwatch]>=5.0
+pytest>=8.0
+ruff>=0.6

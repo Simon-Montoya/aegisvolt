@@ -1,0 +1,30 @@
+# Configuración del ambiente. La MISMA imagen corre en dev/test/prod: solo cambia esto.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aegisvolt-config
+  namespace: aegisvolt
+data:
+  AEGIS_ENV: "${AEGIS_ENV}"
+  AWS_REGION: "us-east-1"
+  AWS_DEFAULT_REGION: "us-east-1"
+  # Floci visto desde los pods (red Docker compartida con el k3s del clúster).
+  AWS_ENDPOINT_URL: "${K8S_AWS_ENDPOINT}"
+  CLOUDWATCH_LOGS: "true"
+  FLAGS_CACHE_SECONDS: "3"
+  SURGE_FORCE_PEAK: "${SURGE_FORCE_PEAK}"
+  STATION_RESERVATION_URL: "http://station-reservation-service"
+  BILLING_WALLET_URL: "http://billing-wallet-service"
+  ENERGY_DISPATCH_URL: "http://energy-dispatch-service"
+---
+# Credenciales ficticias: Floci acepta cualquier par. En AWS real se usaría
+# EKS Pod Identity / IRSA y este Secret desaparecería.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: aws-credentials
+  namespace: aegisvolt
+type: Opaque
+stringData:
+  AWS_ACCESS_KEY_ID: "test"
+  AWS_SECRET_ACCESS_KEY: "test"

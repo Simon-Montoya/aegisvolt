@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+reports/
+.cache/
+
+# Node
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+
+# Terraform
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+infra/plan.txt
+crash.log
+tf-outputs.json
+tfstate-*.json
+
+# Varios
+.env
+*.log
+frontend/tsconfig.tsbuildinfo
+tf-outputs-*.json
+.aegis-local.json
+logs/

@@ -1,0 +1,4 @@
+# Los scripts corren en contenedores Linux del runner: siempre LF aunque se clone en Windows.
+* text=auto eol=lf
+*.ps1 text eol=crlf
+*.png binary

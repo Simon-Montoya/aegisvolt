@@ -1,0 +1,51 @@
+# Plantilla de Deployment usada por scripts/canary_deploy.sh (una por servicio y track).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ${SERVICE}-${TRACK}
+  namespace: aegisvolt
+  labels:
+    app: ${SERVICE}
+    track: ${TRACK}
+    version: "${VERSION}"
+spec:
+  replicas: ${REPLICAS}
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  selector:
+    matchLabels:
+      app: ${SERVICE}
+      track: ${TRACK}
+  template:
+    metadata:
+      labels:
+        app: ${SERVICE}
+        track: ${TRACK}
+        version: "${VERSION}"
+    spec:
+      containers:
+        - name: app
+          image: ${IMAGE}
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 8080 }]
+          envFrom:
+            - configMapRef: { name: aegisvolt-config }
+            - secretRef: { name: aws-credentials }
+          env:
+            - { name: DEPLOY_TRACK, value: "${TRACK}" }
+            - { name: APP_VERSION, value: "${VERSION}" }
+            - { name: SIMULATE_BAD_RELEASE, value: "${SIMULATE_BAD_RELEASE}" }
+          readinessProbe:
+            httpGet: { path: /health, port: 8080 }
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /health, port: 8080 }
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 6
+          resources:
+            requests: { cpu: 25m, memory: 96Mi }
+            limits: { cpu: 300m, memory: 256Mi }

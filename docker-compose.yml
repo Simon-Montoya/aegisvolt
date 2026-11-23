@@ -1,0 +1,84 @@
+# =============================================================================
+# AegisVolt · entorno local
+#
+#   docker compose up -d floci                       # solo la "nube" (Floci)
+#   docker compose --profile app up -d --build       # + la app sin Kubernetes (respaldo / desarrollo)
+#   docker compose --profile ci up -d gitlab-runner  # + runner de GitLab en tu PC
+# =============================================================================
+name: aegisvolt
+
+services:
+  floci:
+    image: floci/floci:latest
+    container_name: floci
+    ports:
+      - "4566:4566"
+    environment:
+      FLOCI_STORAGE_MODE: persistent           # el estado sobrevive a reinicios
+      FLOCI_SERVICES_DOCKER_NETWORK: aegisvolt-net  # los k3s de EKS se unen a esta red -> los pods ven "floci"
+    volumes:
+      - floci-data:/app/data
+      - /var/run/docker.sock:/var/run/docker.sock  # EKS real mode / Lambda necesitan Docker
+    networks: [aegisvolt-net]
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------- app (respaldo)
+  station-reservation-service:
+    profiles: [app]
+    build: { context: ., dockerfile: services/station-reservation/Dockerfile }
+    environment: &app_env
+      AEGIS_ENV: ${AEGIS_ENV:-dev}
+      AWS_ENDPOINT_URL: http://floci:4566
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+      CLOUDWATCH_LOGS: "true"
+      SURGE_FORCE_PEAK: "true"
+      DEPLOY_TRACK: stable
+    networks: [aegisvolt-net]
+    depends_on: [floci]
+
+  billing-wallet-service:
+    profiles: [app]
+    build: { context: ., dockerfile: services/billing-wallet/Dockerfile }
+    environment: *app_env
+    networks: [aegisvolt-net]
+    depends_on: [floci]
+
+  energy-dispatch-service:
+    profiles: [app]
+    build: { context: ., dockerfile: services/energy-dispatch/Dockerfile }
+    environment: *app_env
+    networks: [aegisvolt-net]
+    depends_on: [floci]
+
+  graphql-gateway:
+    profiles: [app]
+    build: { context: ., dockerfile: services/graphql-gateway/Dockerfile }
+    environment:
+      <<: *app_env
+      STATION_RESERVATION_URL: http://station-reservation-service:8080
+      BILLING_WALLET_URL: http://billing-wallet-service:8080
+      ENERGY_DISPATCH_URL: http://energy-dispatch-service:8080
+    ports:
+      - "8081:8080"
+    networks: [aegisvolt-net]
+    depends_on: [station-reservation-service, billing-wallet-service, energy-dispatch-service]
+
+  # ------------------------------------------------------------- runner de GitLab
+  gitlab-runner:
+    profiles: [ci]
+    image: gitlab/gitlab-runner:latest
+    container_name: aegisvolt-gitlab-runner
+    volumes:
+      - gitlab-runner-config:/etc/gitlab-runner
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+
+networks:
+  aegisvolt-net:
+    name: aegisvolt-net
+
+volumes:
+  floci-data:
+  gitlab-runner-config:

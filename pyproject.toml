@@ -1,0 +1,20 @@
+[project]
+name = "aegisvolt"
+version = "1.0.0"
+requires-python = ">=3.12"
+
+[tool.ruff]
+line-length = 200
+target-version = "py312"
+extend-exclude = ["frontend", ".venv", "infra"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["B008", "E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["aegis_common", "station_reservation", "billing_wallet", "energy_dispatch", "graphql_gateway"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["e2e: pruebas extremo a extremo"]

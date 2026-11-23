@@ -1,0 +1,298 @@
+# =============================================================================
+# AegisVolt · Pipeline CI/CD (GitLab CI/CD sobre el repositorio de GitHub)
+#
+# PRE-MERGE  (Pull Request en GitHub -> external_pull_request_event, o MR en GitLab)
+#   validate-promotion · lint & build · unit · integration · e2e · terraform-plan
+#   GitLab reporta el estado del pipeline al PR de GitHub; el Ruleset de GitHub
+#   exige ese check en verde para habilitar el botón Merge.
+#
+# POST-MERGE (push a dev | test | prod, es decir, el merge del PR)
+#   terraform apply (workspace = rama) · seed · build & push a ECR · canary · smoke
+#
+# Todos los jobs corren en el runner de tu PC (tag aegisvolt-local), que es
+# donde vive Floci. Ver docs/setup-github-gitlab.md.
+# =============================================================================
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "external_pull_request_event"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH =~ /^(dev|develop|test|prod)$/
+    - if: $CI_PIPELINE_SOURCE == "web"
+    - when: never
+
+stages:
+  - validate
+  - build
+  - test
+  - plan
+  - apply
+  - deploy
+  - verify
+
+variables:
+  AWS_ACCESS_KEY_ID: "test"
+  AWS_SECRET_ACCESS_KEY: "test"
+  AWS_DEFAULT_REGION: "us-east-1"
+  # Floci de tu PC visto desde los contenedores del runner.
+  FLOCI_HOST_ENDPOINT: "http://host.docker.internal:4566"
+  TF_IN_AUTOMATION: "true"
+  TF_IMAGE: "hashicorp/terraform:1.9"
+  PYTHON_IMAGE: "python:3.12-slim"
+  NODE_IMAGE: "node:22-alpine"
+  DOCKER_IMAGE: "docker:27-cli"
+  K8S_TOOLS_IMAGE: "alpine/k8s:1.31.4"
+  FLOCI_IMAGE: "floci/floci:latest"
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+  IMAGE_TAG: "$CI_COMMIT_SHORT_SHA-$CI_PIPELINE_ID"
+  # Poner en "true" al lanzar el pipeline para demostrar el rollback del canary.
+  SIMULATE_BAD_RELEASE: "false"
+
+default:
+  tags: [aegisvolt-local]
+  interruptible: true
+
+# ----------------------------------------------------------------- reglas
+.pre_merge:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "external_pull_request_event"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+.post_merge:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH =~ /^(dev|develop|test|prod)$/
+      when: on_success
+
+.always:
+  rules:
+    - when: on_success
+
+.python:
+  image: $PYTHON_IMAGE
+  cache:
+    key: pip-$CI_JOB_IMAGE
+    paths: [.cache/pip]
+  before_script:
+    - pip install -q -r requirements-dev.txt
+
+.terraform:
+  image:
+    name: $TF_IMAGE
+    entrypoint: [""]
+  before_script:
+    - . scripts/ci/detect_env.sh
+    - cd infra
+    - terraform init -input=false -backend-config=backend/floci-ci.hcl
+    - terraform workspace select -or-create "$TF_ENV"
+    - echo "Workspace activo -> $(terraform workspace show)"
+
+.floci_service:
+  services:
+    - name: $FLOCI_IMAGE
+      alias: floci
+  variables:
+    FLOCI_ENDPOINT: "http://floci:4566"
+
+# =============================================================== VALIDATE
+validate-promotion:
+  stage: validate
+  image: alpine:3.20
+  extends: .pre_merge
+  script:
+    - apk add --no-cache bash >/dev/null
+    - bash scripts/ci/validate_promotion.sh
+
+lint:
+  stage: validate
+  extends: [.python, .always]
+  script:
+    - ruff check .
+    - bash -n scripts/*.sh scripts/ci/*.sh
+    # El esquema GraphQL versionado debe coincidir con el que genera el código.
+    - PYTHONPATH=libs:services/graphql-gateway AEGIS_ENV=dev python -m graphql_gateway.main print-schema > /tmp/schema.graphql
+    - diff -u services/graphql-gateway/schema.graphql /tmp/schema.graphql
+
+terraform-validate:
+  stage: validate
+  extends: .always
+  image:
+    name: $TF_IMAGE
+    entrypoint: [""]
+  script:
+    - terraform fmt -check -recursive -diff infra
+    - cd infra/bootstrap && terraform init -backend=false -input=false && terraform validate && cd ../..
+    - cd infra && terraform init -backend=false -input=false && terraform validate
+
+# ================================================================== BUILD
+frontend-build:
+  stage: build
+  extends: .always
+  image: $NODE_IMAGE
+  cache:
+    key: npm-$CI_COMMIT_REF_SLUG
+    paths: [frontend/node_modules]
+  script:
+    - cd frontend
+    - npm ci --no-audit --no-fund
+    - npm run build
+  artifacts:
+    paths: [frontend/dist]
+    expire_in: 1 week
+
+docker-build:
+  stage: build
+  extends: .pre_merge
+  image: $DOCKER_IMAGE
+  script:
+    - |
+      for svc in station-reservation billing-wallet energy-dispatch graphql-gateway; do
+        docker build --pull -f "services/${svc}/Dockerfile" --build-arg APP_VERSION="$IMAGE_TAG" -t "aegisvolt-ci/${svc}:${IMAGE_TAG}" .
+      done
+    - docker images | grep aegisvolt-ci
+
+# =================================================================== TEST
+unit-tests:
+  stage: test
+  extends: [.python, .always]
+  needs: [lint]
+  script:
+    - pytest tests/unit -v --junitxml=reports/unit.xml
+  artifacts:
+    when: always
+    reports:
+      junit: reports/unit.xml
+
+integration-tests:
+  stage: test
+  extends: [.python, .floci_service, .always]
+  needs: [lint]
+  script:
+    - python scripts/ci/wait_for.py floci 4566 90
+    - pytest tests/integration -v --junitxml=reports/integration.xml
+  artifacts:
+    when: always
+    reports:
+      junit: reports/integration.xml
+
+e2e-tests:
+  stage: test
+  extends: [.python, .floci_service, .always]
+  needs: [lint]
+  script:
+    - python scripts/ci/wait_for.py floci 4566 90
+    - pytest tests/e2e -v --junitxml=reports/e2e.xml
+  artifacts:
+    when: always
+    reports:
+      junit: reports/e2e.xml
+
+# =================================================================== PLAN
+terraform-plan:
+  stage: plan
+  extends: [.terraform, .pre_merge]
+  needs: [terraform-validate, unit-tests, integration-tests, e2e-tests]
+  resource_group: terraform-$CI_EXTERNAL_PULL_REQUEST_TARGET_BRANCH_NAME$CI_MERGE_REQUEST_TARGET_BRANCH_NAME
+  script:
+    - terraform plan -input=false -lock-timeout=120s -var-file="$TF_VAR_FILE" -var "aws_endpoint=$FLOCI_HOST_ENDPOINT" -out=plan.tfplan
+    - terraform show -no-color plan.tfplan > plan.txt
+    - echo "Plan para el workspace $TF_ENV ->" && grep -E "^Plan:|No changes" plan.txt || true
+  artifacts:
+    name: "terraform-plan-$TF_ENV"
+    paths: [infra/plan.tfplan, infra/plan.txt]
+    expire_in: 2 weeks
+
+# ================================================================== APPLY
+terraform-apply:
+  stage: apply
+  extends: [.terraform, .post_merge]
+  resource_group: terraform-$CI_COMMIT_BRANCH
+  interruptible: false
+  script:
+    # El workspace sale de la rama a la que se hizo merge (dev | test | prod):
+    # este apply SOLO puede modificar el estado env:/<rama>/... de S3.
+    - terraform apply -input=false -auto-approve -lock-timeout=120s -var-file="$TF_VAR_FILE" -var "aws_endpoint=$FLOCI_HOST_ENDPOINT"
+    - terraform output -json > ../tf-outputs.json
+  artifacts:
+    paths: [tf-outputs.json]
+    expire_in: 2 weeks
+
+seed-data:
+  stage: apply
+  extends: .post_merge
+  image: $PYTHON_IMAGE
+  needs: [terraform-apply]
+  variables:
+    AWS_ENDPOINT_URL: $FLOCI_HOST_ENDPOINT
+  script:
+    - pip install -q boto3
+    - . scripts/ci/detect_env.sh
+    - python scripts/aegis.py seed --env "$TF_ENV"
+
+# ================================================================= DEPLOY
+build-push-images:
+  stage: deploy
+  extends: .post_merge
+  image: $DOCKER_IMAGE
+  needs: [terraform-apply]
+  interruptible: false
+  variables:
+    AWS_ENDPOINT_URL: $FLOCI_HOST_ENDPOINT
+  script:
+    - apk add --no-cache aws-cli jq bash >/dev/null
+    - REGISTRY="$(jq -r '.ecr_repositories.value | to_entries[0].value' tf-outputs.json | cut -d/ -f1)"
+    - aws ecr get-login-password | docker login --username AWS --password-stdin "$REGISTRY"
+    - |
+      for pair in station-reservation:station-reservation-service billing-wallet:billing-wallet-service energy-dispatch:energy-dispatch-service graphql-gateway:graphql-gateway; do
+        dir="${pair%%:*}"; svc="${pair##*:}"
+        repo="$(jq -r --arg s "$svc" '.ecr_repositories.value[$s]' tf-outputs.json)"
+        docker build -f "services/${dir}/Dockerfile" --build-arg APP_VERSION="$IMAGE_TAG" -t "${repo}:${IMAGE_TAG}" .
+        docker push "${repo}:${IMAGE_TAG}"
+      done
+
+canary-deploy:
+  stage: deploy
+  extends: .post_merge
+  image:
+    name: $K8S_TOOLS_IMAGE
+    entrypoint: [""]
+  needs: [terraform-apply, build-push-images, seed-data]
+  resource_group: k8s-$CI_COMMIT_BRANCH
+  interruptible: false
+  variables:
+    AWS_ENDPOINT_URL: $FLOCI_HOST_ENDPOINT
+    # EKS de Floci valida el token de kubectl con IAM: test/test se rechaza.
+    AWS_ACCESS_KEY_ID: $FLOCI_IAM_ACCESS_KEY_ID
+    AWS_SECRET_ACCESS_KEY: $FLOCI_IAM_SECRET_ACCESS_KEY
+  script:
+    - apk add --no-cache bash gettext jq >/dev/null 2>&1 || true
+    - . scripts/ci/detect_env.sh
+    - bash scripts/ci/kubeconfig.sh "$TF_ENV"
+    # 20 % canary -> análisis (health + CloudWatch + alarma) -> 100 % o rollback automático
+    - bash scripts/deploy_k8s.sh "$TF_ENV" "$IMAGE_TAG" tf-outputs.json
+
+# ================================================================= VERIFY
+smoke-test:
+  stage: verify
+  extends: .post_merge
+  image:
+    name: $K8S_TOOLS_IMAGE
+    entrypoint: [""]
+  needs: [canary-deploy]
+  variables:
+    AWS_ENDPOINT_URL: $FLOCI_HOST_ENDPOINT
+    AWS_ACCESS_KEY_ID: $FLOCI_IAM_ACCESS_KEY_ID
+    AWS_SECRET_ACCESS_KEY: $FLOCI_IAM_SECRET_ACCESS_KEY
+  script:
+    - apk add --no-cache bash >/dev/null 2>&1 || true
+    - . scripts/ci/detect_env.sh
+    - bash scripts/ci/kubeconfig.sh "$TF_ENV"
+    - |
+      kubectl -n aegisvolt exec deploy/graphql-gateway-stable -- python -c "
+      import json, urllib.request
+      q = {'query': '{ environment { name version services } stations { stationId availableConnectors } featureFlags { name enabled } }'}
+      req = urllib.request.Request('http://127.0.0.1:8080/graphql', data=json.dumps(q).encode(), headers={'Content-Type': 'application/json'})
+      data = json.load(urllib.request.urlopen(req, timeout=10))['data']
+      print(json.dumps(data, indent=2))
+      assert data['environment']['name'] == '$TF_ENV', 'ambiente incorrecto'
+      assert all(v == 'ok' for v in data['environment']['services'].values()), 'servicio caído'
+      "

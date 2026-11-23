@@ -1,0 +1,6 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: aegisvolt
+  labels:
+    aegisvolt/environment: "${AEGIS_ENV}"
