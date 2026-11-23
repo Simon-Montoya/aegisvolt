@@ -1,6 +1,9 @@
 # =============================================================================
 # AegisVolt · Pipeline CI/CD (GitLab CI/CD sobre el repositorio de GitHub)
 #
+# GitHub Actions (.github/workflows/gitlab-ci.yml) copia el código a GitLab y lanza
+# este pipeline por API con AEGIS_PIPELINE_MODE = pre_merge | post_merge.
+#
 # PRE-MERGE  (Pull Request en GitHub -> external_pull_request_event, o MR en GitLab)
 #   validate-promotion · lint & build · unit · integration · e2e · terraform-plan
 #   GitLab reporta el estado del pipeline al PR de GitHub; el Ruleset de GitHub
@@ -18,6 +21,7 @@ workflow:
     - if: $CI_PIPELINE_SOURCE == "external_pull_request_event"
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH =~ /^(dev|develop|test|prod)$/
+    - if: $CI_PIPELINE_SOURCE == "api" && $AEGIS_PIPELINE_MODE   # lanzado desde GitHub Actions
     - if: $CI_PIPELINE_SOURCE == "web"
     - when: never
 
@@ -55,11 +59,14 @@ default:
 # ----------------------------------------------------------------- reglas
 .pre_merge:
   rules:
+    - if: $AEGIS_PIPELINE_MODE == "pre_merge"                 # PR en GitHub (vía GitHub Actions)
     - if: $CI_PIPELINE_SOURCE == "external_pull_request_event"
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
 
 .post_merge:
   rules:
+    - if: $AEGIS_PIPELINE_MODE == "post_merge" && $CI_COMMIT_BRANCH =~ /^(dev|develop|test|prod)$/   # merge en GitHub
+      when: on_success
     - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH =~ /^(dev|develop|test|prod)$/
       when: on_success
 
@@ -191,7 +198,7 @@ terraform-plan:
   stage: plan
   extends: [.terraform, .pre_merge]
   needs: [terraform-validate, unit-tests, integration-tests, e2e-tests]
-  resource_group: terraform-$CI_EXTERNAL_PULL_REQUEST_TARGET_BRANCH_NAME$CI_MERGE_REQUEST_TARGET_BRANCH_NAME
+  resource_group: terraform-$PR_TARGET_BRANCH$CI_EXTERNAL_PULL_REQUEST_TARGET_BRANCH_NAME$CI_MERGE_REQUEST_TARGET_BRANCH_NAME
   script:
     - terraform plan -input=false -lock-timeout=120s -var-file="$TF_VAR_FILE" -var "aws_endpoint=$FLOCI_HOST_ENDPOINT" -out=plan.tfplan
     - terraform show -no-color plan.tfplan > plan.txt

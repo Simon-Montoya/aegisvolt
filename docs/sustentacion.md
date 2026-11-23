@@ -81,7 +81,7 @@ git push --force origin test
 #   - Cannot force-push to this branch
 ```
 
-La regla es el Ruleset `aegisvolt-protected-environments` (GitHub → Settings → Rules → Rulesets), creado con `scripts/github_protect_branches.sh`. Contiene `non_fast_forward`, `deletion`, `pull_request` y `required_status_checks`, y no tiene bypass para nadie.
+La regla es el Ruleset `aegisvolt-protected-environments` (GitHub → Settings → Rules → Rulesets), creado con `scripts/github_protect_branches.sh`. Contiene `non_fast_forward`, `deletion`, `pull_request` y `required_status_checks` (`gitlab-pipeline`), y no tiene bypass para nadie. El check `gitlab-pipeline` es el workflow de GitHub Actions que lanza el pipeline en GitLab Free y espera su resultado.
 
 La cadena de promoción se hace cumplir con el job `validate-promotion` (`scripts/ci/validate_promotion.sh`): un PR `feature/x → test` queda en rojo y el Merge no se habilita.
 
@@ -89,8 +89,8 @@ La cadena de promoción se hace cumplir con el job `validate-promotion` (`script
 
 `scripts/ci/detect_env.sh`, invocado desde `.terraform` en `.gitlab-ci.yml`:
 
-- **Pre-merge:** toma la rama **destino** del PR (`CI_EXTERNAL_PULL_REQUEST_TARGET_BRANCH_NAME` o `CI_MERGE_REQUEST_TARGET_BRANCH_NAME`) y corre `terraform plan` en ese workspace.
-- **Post-merge:** el merge produce un push a `dev`, `test` o `prod`. El job `terraform-apply` (regla `.post_merge`) toma `CI_COMMIT_BRANCH`, lo traduce con un `case` a `TF_ENV` y ejecuta `terraform workspace select -or-create $TF_ENV` y `terraform apply -auto-approve -var-file=env/$TF_ENV.tfvars`. Una rama que no sea de ambiente hace fallar el job.
+- **Pre-merge:** GitHub Actions lanza el pipeline con `AEGIS_PIPELINE_MODE=pre_merge` y `PR_TARGET_BRANCH`; el script toma la rama **destino** del PR y corre `terraform plan` en ese workspace.
+- **Post-merge:** el merge produce un push a `dev`, `test` o `prod`; Actions lanza el pipeline con `AEGIS_PIPELINE_MODE=post_merge` sobre esa rama. El job `terraform-apply` (regla `.post_merge`) toma `CI_COMMIT_BRANCH`, lo traduce con un `case` a `TF_ENV` y ejecuta `terraform workspace select -or-create $TF_ENV` y `terraform apply -auto-approve -var-file=env/$TF_ENV.tfvars`. Una rama que no sea de ambiente hace fallar el job.
 
 ### ¿Qué evalúa el Canary antes de pasar del 20 % al 100 %?
 

@@ -8,7 +8,11 @@
 # Exporta TARGET_BRANCH, SOURCE_BRANCH, TF_ENV y TF_VAR_FILE.
 # -----------------------------------------------------------------------------
 
-if [ "${CI_PIPELINE_SOURCE:-}" = "external_pull_request_event" ]; then
+if [ "${AEGIS_PIPELINE_MODE:-}" = "pre_merge" ]; then
+  # PR de GitHub reenviado por GitHub Actions
+  TARGET_BRANCH="${PR_TARGET_BRANCH}"
+  SOURCE_BRANCH="${PR_SOURCE_BRANCH}"
+elif [ "${CI_PIPELINE_SOURCE:-}" = "external_pull_request_event" ]; then
   TARGET_BRANCH="${CI_EXTERNAL_PULL_REQUEST_TARGET_BRANCH_NAME}"
   SOURCE_BRANCH="${CI_EXTERNAL_PULL_REQUEST_SOURCE_BRANCH_NAME}"
 elif [ "${CI_PIPELINE_SOURCE:-}" = "merge_request_event" ]; then

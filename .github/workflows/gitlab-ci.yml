@@ -1,0 +1,44 @@
+# =============================================================================
+# Puente GitHub -> GitLab CI/CD (GitLab Free).
+#
+# El repositorio vive en GitHub; el pipeline corre en GitLab (.gitlab-ci.yml) con
+# el runner de tu PC. Este workflow:
+#   1. copia el código del PR o de la rama al proyecto de GitLab (sin disparar CI),
+#   2. lanza el pipeline por API indicando el modo:
+#        pull_request a dev/test/prod -> pre_merge  (tests + terraform plan)
+#        push a dev/test/prod (merge)  -> post_merge (apply + canary)
+#   3. espera el resultado. Este job ("gitlab-pipeline") es el check obligatorio
+#      del Ruleset de GitHub: si el pipeline de GitLab falla, no se puede hacer Merge.
+#
+# Configuración (GitHub → Settings → Secrets and variables → Actions):
+#   secret   GITLAB_TOKEN    token personal de GitLab con scopes api + write_repository
+#   variable GITLAB_PROJECT  ruta del proyecto en GitLab, p. ej. simon-montoya/aegisvolt
+# =============================================================================
+name: GitLab CI
+
+on:
+  pull_request:
+    branches: [dev, test, prod]
+  push:
+    branches: [dev, test, prod]
+
+concurrency:
+  group: gitlab-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  gitlab-pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Ejecutar pipeline en GitLab y esperar el resultado
+        env:
+          GITLAB_URL: https://gitlab.com
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+          GITLAB_PROJECT: ${{ vars.GITLAB_PROJECT }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: bash scripts/ci/github_to_gitlab.sh

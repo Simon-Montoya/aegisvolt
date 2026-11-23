@@ -11,13 +11,13 @@
 #   gh auth login
 #   scripts/github_protect_branches.sh <owner>/<repo> [contexto_del_check]
 #
-# El contexto del check es el nombre con el que GitLab reporta el estado en
-# GitHub (aparece en la pestaña Checks del primer PR, p. ej. "ci/gitlab/gitlab.com").
+# El check es el job "gitlab-pipeline" de .github/workflows/gitlab-ci.yml, que
+# espera el resultado del pipeline de GitLab.
 # Requisito: repo público, o privado con GitHub Pro/Team (Student Developer Pack).
 # -----------------------------------------------------------------------------
 set -euo pipefail
 REPO="${1:?owner/repo}"
-CHECK="${2:-ci/gitlab/gitlab.com}"
+CHECK="${2:-gitlab-pipeline}"
 
 payload=$(cat <<JSON
 {

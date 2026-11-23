@@ -30,7 +30,11 @@ foreach ($envName in "dev", "test", "prod") {
     Start-Sleep 5
   }
   if (-not $ok) { Write-Host "El nodo de $envName no está Ready" -ForegroundColor Red; $results += "$envName : NODO NO LISTO"; continue }
-  kubectl --context $ctx -n aegisvolt rollout status deploy/graphql-gateway-stable --timeout=180s | Out-Null
+  # Tras reiniciar Docker los pods tardan en volver: se espera a que TODOS los deployments estén listos
+  foreach ($d in "station-reservation-service", "billing-wallet-service", "energy-dispatch-service", "graphql-gateway") {
+    kubectl --context $ctx -n aegisvolt rollout status "deploy/$d-stable" --timeout=240s | Out-Null
+  }
+  kubectl --context $ctx -n aegisvolt wait --for=condition=Ready pod -l app=graphql-gateway --timeout=180s | Out-Null
   $running = (kubectl --context $ctx -n aegisvolt get pods --no-headers 2>$null | Select-String "Running").Count
   Write-Host "Pods Running: $running"
   $out = Get-Content "$root\scripts\ci\smoke_query.py" -Raw | kubectl --context $ctx -n aegisvolt exec -i deploy/graphql-gateway-stable -- python - $envName 2>&1
@@ -42,4 +46,4 @@ foreach ($envName in "dev", "test", "prod") {
 }
 Write-Host "`n===== RESUMEN =====" -ForegroundColor Cyan
 $results | ForEach-Object { Write-Host $_ }
-Write-Host "`nFrontend: .\scripts\port_forward.ps1 dev|test|prod  y  cd frontend; npm run dev"
+Write-Host "`nFrontend: .\scripts\port_forward_all.ps1   y luego   cd frontend; npm run dev"
