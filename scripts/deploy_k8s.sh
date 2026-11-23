@@ -25,7 +25,7 @@ done
 
 for service in station-reservation-service billing-wallet-service energy-dispatch-service graphql-gateway; do
   repo="$(jq -r --arg s "$service" '.ecr_repositories.value[$s]' "$OUTPUTS")"
-  "$ROOT/scripts/canary_deploy.sh" "$ENVIRONMENT" "$service" "${repo}:${TAG}" "$TAG"
+  bash "$ROOT/scripts/canary_deploy.sh" "$ENVIRONMENT" "$service" "${repo}:${TAG}" "$TAG"
 done
 
 kubectl -n aegisvolt get deploy,svc,pods -o wide
