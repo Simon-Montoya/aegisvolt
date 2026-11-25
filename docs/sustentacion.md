@@ -53,7 +53,9 @@ VPC Link → NLB interno (internal = true, subredes privadas) listener TCP 80
   ▼  target group → NodePort 30080 de los nodos EKS (registro automático vía ASG del node group)
 Nodo EKS (Security Group eks-sg: 30080 solo desde el CIDR de la VPC)
   ▼  kube-proxy (iptables) → Service graphql-gateway → pod (stable o canary)
-Pod → Floci en 10.<x>.0.2:4566 (IP de Floci dentro de la red de la VPC del ambiente; k8s/env/<env>.env)
+Pod → Floci: en AWS real sería el Gateway/Interface Endpoint. En el emulador, cada despliegue prueba desde los pods
+      (consulta real a DynamoDB) la IP de Floci dentro de la VPC (10.x.0.2), el host de Docker Desktop y la red
+      aegisvolt-net, y usa la que responde (scripts/deploy_k8s.sh).
 Pod → DynamoDB/S3: tabla de rutas privada → ruta a la prefix list del Gateway Endpoint (no hay 0.0.0.0/0)
 Pod → CloudWatch Logs/ECR/STS: Interface Endpoints (ENIs privadas)
 ```

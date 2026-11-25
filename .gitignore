@@ -29,3 +29,4 @@ frontend/tsconfig.tsbuildinfo
 tf-outputs-*.json
 .aegis-local.json
 logs/
+notas-presentacion/

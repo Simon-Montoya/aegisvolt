@@ -19,19 +19,54 @@ set -a
 source "$ROOT/k8s/env/${ENVIRONMENT}.env"
 set +a
 
-# IP de Floci dentro de la red de la VPC del ambiente. Docker puede reasignarla al
-# reiniciar, así que se detecta en cada despliegue (si hay acceso al socket de Docker).
-if command -v docker >/dev/null 2>&1 && [[ -f "$OUTPUTS" ]]; then
-  VPC_ID="$(jq -r '.vpc_id.value // empty' "$OUTPUTS")"
-  FLOCI_IP="$(docker inspect floci --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}={{$v.IPAddress}} {{end}}' 2>/dev/null \
-    | tr ' ' '\n' | grep -- "${VPC_ID}=" | cut -d= -f2 || true)"
-  if [[ -n "$VPC_ID" && -n "$FLOCI_IP" ]]; then
-    K8S_AWS_ENDPOINT="http://${FLOCI_IP}:4566"
-    echo "Floci en la VPC ${VPC_ID}: ${K8S_AWS_ENDPOINT}"
-  else
-    echo "AVISO: no se detectó la IP de Floci en la VPC; se usa ${K8S_AWS_ENDPOINT} (k8s/env/${ENVIRONMENT}.env)"
-  fi
+# ---------------------------------------------------------------------------
+# Endpoint de Floci visto DESDE LOS PODS. Se prueban varias rutas con una consulta
+# real a DynamoDB hecha dentro del clúster y se usa la primera que responde:
+#   1. IP de Floci en la red de la VPC del ambiente (10.x.0.2): el tráfico no sale de la VPC
+#   2. host de Docker Desktop (192.168.65.254 -> puerto 4566 publicado por Floci)
+#   3. IP de Floci en la red aegisvolt-net
+#   4. el valor de k8s/env/<env>.env
+# Docker puede cambiar estas rutas al reiniciarse, por eso se re-evalúa en cada despliegue.
+# ---------------------------------------------------------------------------
+CANDIDATES=()
+if command -v docker >/dev/null 2>&1; then
+  NETS="$(docker inspect floci --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}={{$v.IPAddress}} {{end}}' 2>/dev/null | tr ' ' '\n' || true)"
+  VPC_ID="$( [[ -f "$OUTPUTS" ]] && jq -r '.vpc_id.value // empty' "$OUTPUTS" || true)"
+  [[ -n "$VPC_ID" ]] && VPC_IP="$(grep -- "${VPC_ID}=" <<<"$NETS" | cut -d= -f2 || true)" && [[ -n "$VPC_IP" ]] && CANDIDATES+=("http://${VPC_IP}:4566")
+  CANDIDATES+=("http://192.168.65.254:4566")
+  NET_IP="$(grep -- "^aegisvolt-net=" <<<"$NETS" | cut -d= -f2 || true)"
+  [[ -n "$NET_IP" ]] && CANDIDATES+=("http://${NET_IP}:4566")
 fi
+CANDIDATES+=("$K8S_AWS_ENDPOINT")
+
+PROBE_DEPLOY=""
+for d in graphql-gateway-stable station-reservation-service-stable; do
+  kubectl -n aegisvolt get deploy "$d" >/dev/null 2>&1 && PROBE_DEPLOY="$d" && break
+done
+
+probe() { # $1 = endpoint; éxito si DynamoDB responde desde un pod en < 10 s
+  timeout 20 kubectl -n aegisvolt exec "deploy/${PROBE_DEPLOY}" -- python -c "
+import boto3
+from botocore.config import Config
+c = boto3.client('dynamodb', endpoint_url='$1', region_name='us-east-1', aws_access_key_id='test', aws_secret_access_key='test',
+                 config=Config(connect_timeout=3, read_timeout=6, retries={'max_attempts': 1}))
+c.list_tables(Limit=1)
+" >/dev/null 2>&1
+}
+
+if [[ -n "$PROBE_DEPLOY" ]]; then
+  SELECTED=""
+  for ep in "${CANDIDATES[@]}"; do
+    if probe "$ep"; then echo "✔ DynamoDB responde desde los pods vía ${ep}"; SELECTED="$ep"; break
+    else echo "✘ sin respuesta desde los pods vía ${ep}"; fi
+  done
+  if [[ -n "$SELECTED" ]]; then K8S_AWS_ENDPOINT="$SELECTED"
+  else echo "AVISO: ninguna ruta respondió; se mantiene ${K8S_AWS_ENDPOINT}"; fi
+else
+  # Primer despliegue: aún no hay pods para probar; se usa la primera candidata.
+  K8S_AWS_ENDPOINT="${CANDIDATES[0]}"
+fi
+echo "Endpoint de Floci para los pods: ${K8S_AWS_ENDPOINT}"
 export K8S_AWS_ENDPOINT
 
 CONFIG_CHANGED=false

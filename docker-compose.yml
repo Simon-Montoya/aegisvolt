@@ -22,6 +22,22 @@ services:
     networks: [aegisvolt-net]
     restart: unless-stopped
 
+  # Consola web de Floci (Cloud Explorer): http://localhost:4500
+  #   docker compose --profile ui up -d floci-ui
+  floci-ui:
+    profiles: [ui]
+    image: floci/floci-ui:latest
+    container_name: floci-ui
+    ports:
+      - "4500:4500"
+    environment:
+      FLOCI_ENDPOINT: http://floci:4566
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+    networks: [aegisvolt-net]
+    depends_on: [floci]
+
   # ---------------------------------------------------------------- app (respaldo)
   station-reservation-service:
     profiles: [app]
