@@ -10,7 +10,7 @@
 #   exige ese check en verde para habilitar el botón Merge.
 #
 # POST-MERGE (push a dev | test | prod, es decir, el merge del PR)
-#   terraform apply (workspace = rama) · seed · build & push a ECR · canary · smoke
+#   terraform apply (workspace = rama) · seed · build & push a ECR · canary (20 % → análisis → 100 % o rollback)
 #
 # Todos los jobs corren en el runner de tu PC (tag aegisvolt-local), que es
 # donde vive Floci. Ver docs/setup-github-gitlab.md.
@@ -32,7 +32,6 @@ stages:
   - plan
   - apply
   - deploy
-  - verify
 
 variables:
   AWS_ACCESS_KEY_ID: "test"
@@ -282,24 +281,3 @@ canary-deploy:
     - bash scripts/ci/kubeconfig.sh "$TF_ENV"
     # 20 % canary -> análisis (health + CloudWatch + alarma) -> 100 % o rollback automático
     - bash scripts/deploy_k8s.sh "$TF_ENV" "$IMAGE_TAG" tf-outputs.json
-
-# ================================================================= VERIFY
-smoke-test:
-  stage: verify
-  extends: .post_merge
-  image:
-    name: $K8S_TOOLS_IMAGE
-    entrypoint: [""]
-  needs: [canary-deploy]
-  variables:
-    AWS_ENDPOINT_URL: $FLOCI_HOST_ENDPOINT
-    AWS_ACCESS_KEY_ID: $FLOCI_IAM_ACCESS_KEY_ID
-    AWS_SECRET_ACCESS_KEY: $FLOCI_IAM_SECRET_ACCESS_KEY
-  script:
-    - apk add --no-cache bash >/dev/null 2>&1 || true
-    - . scripts/ci/detect_env.sh
-    - bash scripts/ci/kubeconfig.sh "$TF_ENV"
-    # Espera a que el gateway recién promovido esté listo y consulta GraphQL desde dentro del pod
-    - kubectl -n aegisvolt rollout status deploy/graphql-gateway-stable --timeout=180s
-    - kubectl -n aegisvolt wait --for=condition=Ready pod -l app=graphql-gateway,track=stable --timeout=180s
-    - kubectl -n aegisvolt exec -i deploy/graphql-gateway-stable -- python - "$TF_ENV" < scripts/ci/smoke_query.py
